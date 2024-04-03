@@ -1,0 +1,28 @@
+<idea-plugin version="2">
+    <id>com.wsl.symlinks</id>
+    <name>Wsl Symlinks</name>
+    <version>2.0</version>
+    <vendor url="https://github.com/patricklx/">Patrick Pircher</vendor>
+
+    <description><![CDATA[
+      This plugin provides wsl symlink support
+    ]]></description>
+
+    <change-notes><![CDATA[
+       
+see <a href="https://github.com/patricklx/intellij-wsl-symlinks/blob/main/CHANGELOG.md">https://github.com/patricklx/intellij-wsl-symlinks/</a> for more
+    ]]>
+    </change-notes>
+
+    <!-- please see http://www.jetbrains.org/intellij/sdk/docs/basics/getting_started/build_number_ranges.html for description -->
+    <idea-version since-build="232.8453.116"/>
+
+    <!-- please see http://www.jetbrains.org/intellij/sdk/docs/basics/getting_started/plugin_compatibility.html
+         on how to target different products -->
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <virtualFileSystem key="file"  implementationClass="com.wsl.symlinks.vfs.WslVirtualFileSystem" order="first"/>
+    </extensions>
+</idea-plugin>

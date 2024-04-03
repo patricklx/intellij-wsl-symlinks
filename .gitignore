@@ -1,0 +1,14 @@
+*
+!.github
+!.github/**/*
+!src
+!src/**/*
+!.gitmodules
+!build.gradle.kts
+!CHANGELOG.md
+!gradle.properties
+!gradlew
+!gradlew.bat
+!LICENSE
+!README.md
+!settings.gradle

@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+      - 'v*'
+  pull_request: {}
+  schedule:
+    - cron:  '0 3 * * *' # daily, at 3am
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+       matrix:
+         os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        with:
+          submodules: true
+
+          token: ${{ github.token }}
+
+      - uses: actions/setup-java@v4.2.0
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - run: chmod +x ./gradlew
+      - run: ./gradlew assemble
+      - run: ./gradlew check
+  release:
+    name: Update Changelog, Create Tag and Release
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        with:
+          submodules: true
+          fetch-depth: 0
+          token: ${{ github.token }}
+      - name: Use Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: sudo apt-get install markdown -y
+      - uses: actions/setup-java@v4.2.0
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+          
+      - name: verify tag exists
+        id: tag-exists
+        run: |
+          version=$(sh ./gradlew -q printVersion)
+          TAG=v$version
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag exists";
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: verify release already published
+        id: already-published
+        run: |
+          version=$(sh ./gradlew -q printVersion)
+          released=$(echo "$version" | sh ./gradlew verifyAlreadyReleased -q)
+          echo "exists=$released" >> "$GITHUB_OUTPUT"
+      - name: create changelog
+        id: changelog
+        env:
+          TAG_EXISTS: ${{ steps.tag-exists.outputs.exists }}
+          GITHUB_AUTH: ${{ github.token }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          version=$(sh ./gradlew -q printVersion)
+          TAG=v$version
+          if [[ "$TAG_EXISTS" == "true" ]]; then
+            from=$(git tag --sort=-creatordate | grep -A 1 $TAG | tail -n 1)
+            changelog=$(npx lerna-changelog --repo $GITHUB_REPO --from="$from" --to="$TAG")
+            echo "$changelog" > new_changelog.txt
+          else            
+            changelog=$(npx lerna-changelog --repo $GITHUB_REPO --next-version=$TAG)
+            echo "$changelog" > new_changelog.txt
+          fi
+          echo "$changelog"
+          echo "::debug::changelog $changelog"
+          
+
+
+          html=$(echo "$changelog" | markdown)
+          echo "html: $html"
+          echo "::debug::html $html"
+
+      - name: create tag
+        id: tag
+        if: steps.tag-exists.outputs.exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_COMMIT: ${{ github.sha }}
+          GITHUB_REPO: ${{ github.repository }}
+
+        run: |
+          set -e
+          CHANGELOG=$(cat new_changelog.txt)
+          echo "$CHANGELOG"
+          version=$(sh ./gradlew -q printVersion)
+          TAG=v$version                      
+          echo -e "# Changelog\n\n$CHANGELOG\n$(tail --lines=+2 CHANGELOG.md)" > CHANGELOG.md
+          git add CHANGELOG.md
+          git config --local user.email "$GITHUB_ACTOR@users.noreply.github.com"
+          git config --local user.name "$GITHUB_ACTOR"
+          git commit -m "update changelog"
+          git tag $TAG
+          git fetch --all
+          git rebase origin/main
+          git push
+          git push --tags          
+          echo "tag=created" >> "$GITHUB_OUTPUT"
+      - if: (steps.tag.outputs.tag == 'created' || steps.tag-exists.outputs.exists == 'true') && steps.already-published.outputs.exists == 'false'
+        env:
+          ORG_GRADLE_PROJECT_intellijPublishToken: ${{ secrets.ORG_GRADLE_PROJECT_intellijPublishToken }}
+
+        run: |          
+          chmod +x ./gradlew
+          CHANGELOG=$(cat new_changelog.txt | markdown)
+          echo "$CHANGELOG" | sh ./gradlew updateChangelog
+          ./gradlew buildPlugin
+          ./gradlew publishPlugin
+
+  upload:
+    name: Upload
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+      - run: chmod +x ./gradlew
+      - run: ./gradlew buildPlugin && ls ./build/distributions
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WslSymlinks.zip
+          path: ./build/distributions/WslSymlinks.js-*.zip
+
