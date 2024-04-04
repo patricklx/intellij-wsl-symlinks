@@ -1,31 +1,47 @@
 package com.wsl.symlinks.vfs
 
 import ai.grazie.utils.WeakHashMap
+import com.intellij.ide.AppLifecycleListener
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Attachment
 import com.intellij.openapi.diagnostic.DefaultLogger
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.io.FileAttributes
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileSystem
+import com.intellij.openapi.vfs.impl.VirtualFileManagerImpl
 import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
 import com.intellij.util.io.URLUtil
 import java.io.*
-import java.util.ResourceBundle
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
 
 
-class StartupListener {
-
+class StartupListener: AppLifecycleListener {
+    override fun appFrameCreated(commandLineArgs: MutableList<String>) {
+        MyLogger.setup()
+    }
 }
 
 class MyLogger(category: String): DefaultLogger(category) {
-    override fun error(message: String?, t: Throwable?, vararg details: String?) {
 
+    override fun error(message: String?) {
+        if (message?.contains(">1 file system registered for protocol") == true) {
+            return
+        }
+        super.error(message)
+    }
+
+    override fun error(message: String?, t: Throwable?, vararg details: String?) {
+        if (message?.contains(">1 file system registered for protocol") == true) {
+            return
+        }
+        super.error(message, t, *details)
     }
 
     companion object {
@@ -37,7 +53,6 @@ class MyLogger(category: String): DefaultLogger(category) {
 }
 
 val myResourceLock = ReentrantLock()
-val xxx = MyLogger.setup()
 
 class WslSymlinksProvider(distro: String) {
 
@@ -47,10 +62,13 @@ class WslSymlinksProvider(distro: String) {
         internal var value: String? = null
         internal val condition = myResourceLock.newCondition()
         fun getValue(): String? {
-            while (value == null) {
-                myResourceLock.withLock {
-                    this.condition.await()
-                }
+            var elapsed = 0
+            while (value == null && elapsed < 500) {
+                condition.await(10, TimeUnit.MILLISECONDS)
+                elapsed += 10
+            }
+            if (this.value == null) {
+                throw Error("failed to obtain file info for $request")
             }
             return this.value
         }
@@ -77,6 +95,12 @@ class WslSymlinksProvider(distro: String) {
         val writer = BufferedWriter(OutputStreamWriter(stdin))
         this.processReader = reader;
         this.processWriter = writer;
+
+        process.onExit().whenComplete { t, u ->
+            this.process = builder.start()
+            this.processReader = BufferedReader(InputStreamReader(process.inputStream))
+            this.processWriter = BufferedWriter(OutputStreamWriter(process.outputStream));
+        }
 
         thread {
             while (true) {
