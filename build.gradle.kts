@@ -91,7 +91,7 @@ tasks.register("updateChangelog") {
 }
 
 tasks.register("listRecentReleased") {
-    val text = URL("https://plugins.jetbrains.com/api/plugins/15499/updates?channel=&size=8").readText()
+    val text = URL("https://plugins.jetbrains.com/api/plugins/24097/updates?channel=&size=8").readText()
     val obj = groovy.json.JsonSlurper().parseText(text)
     val versions = (obj as ArrayList<Map<*,*>>).map { it.get("version") }
     println(groovy.json.JsonBuilder(versions).toPrettyString())
@@ -99,9 +99,8 @@ tasks.register("listRecentReleased") {
 
 tasks.register("verifyAlreadyReleased") {
     var input = generateSequence(::readLine).joinToString("\n")
-    val text = URL("https://plugins.jetbrains.com/api/plugins/15499/updates?channel=&size=100").readText()
+    val text = URL("https://plugins.jetbrains.com/api/plugins/24097/updates?channel=&size=100").readText()
     val obj = groovy.json.JsonSlurper().parseText(text)
     val versions = (obj as ArrayList<Map<*,*>>).map { it.get("version") }
-    //println(versions.contains(input))
-    println("false")
+    println(versions.contains(input))
 }
