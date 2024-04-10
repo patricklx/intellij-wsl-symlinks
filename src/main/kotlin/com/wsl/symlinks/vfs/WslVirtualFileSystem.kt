@@ -2,6 +2,7 @@ package com.wsl.symlinks.vfs
 
 import ai.grazie.utils.WeakHashMap
 import com.intellij.ide.AppLifecycleListener
+import com.intellij.idea.IdeaLogger
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Attachment
 import com.intellij.openapi.diagnostic.DefaultLogger
@@ -46,7 +47,8 @@ class MyLogger(category: String): DefaultLogger(category) {
 
     companion object {
         fun setup() {
-            Logger.setFactory { category -> MyLogger(category) }
+            //IdeaLogger.setFactory { category -> MyLogger(category) }
+            //Logger.setFactory { category -> MyLogger(category) }
         }
 //        val logger = setup()
     }
@@ -64,7 +66,10 @@ class WslSymlinksProvider(distro: String) {
         fun getValue(): String? {
             var elapsed = 0
             while (value == null && elapsed < 500) {
-                condition.await(10, TimeUnit.MILLISECONDS)
+                if (myResourceLock.tryLock(10, TimeUnit.MILLISECONDS)) {
+                    condition.await(10, TimeUnit.MILLISECONDS)
+                    myResourceLock.unlock()
+                }
                 elapsed += 10
             }
             if (this.value == null) {
