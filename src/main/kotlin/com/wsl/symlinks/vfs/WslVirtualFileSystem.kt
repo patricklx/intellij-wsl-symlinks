@@ -61,9 +61,9 @@ val myResourceLock = ReentrantLock()
 class WslSymlinksProvider(distro: String) {
     val LOGGER = Logger.getInstance(WslSymlinksProvider::class.java)
 
-    private var process: Process
-    private var processReader: BufferedReader
-    private var processWriter: BufferedWriter
+    private var process: Process? = null
+    private var processReader: BufferedReader? = null
+    private var processWriter: BufferedWriter? = null
     private val queue: LinkedBlockingQueue<AsyncValue> = LinkedBlockingQueue()
     private val mapped: SynchronizedMap<String, AsyncValue> = SynchronizedMap()
 
@@ -93,28 +93,28 @@ class WslSymlinksProvider(distro: String) {
         val location = "\\\\wsl.localhost\\$distro\\var\\tmp\\intellij-idea-wsl-symlinks.sh"
         File(location).writeText(bash)
         val builder = ProcessBuilder("wsl.exe", "-d", distro,  "-e", "bash", "//var/tmp/intellij-idea-wsl-symlinks.sh")
-        val process = builder.start()
-        this.process = process
 
-        val stdin: OutputStream = process.outputStream // <- Eh?
-        val stdout: InputStream = process.inputStream
 
-        val reader = BufferedReader(InputStreamReader(stdout))
-        val writer = BufferedWriter(OutputStreamWriter(stdin))
-        this.processReader = reader;
-        this.processWriter = writer;
-
-        process.onExit().whenComplete { t, u ->
-            LOGGER.error("process did exit", u)
-            this.process = builder.start()
+        fun setupProcess() {
+            val process = builder.start()
+            this.process = process
             this.processReader = BufferedReader(InputStreamReader(process.inputStream))
             this.processWriter = BufferedWriter(OutputStreamWriter(process.outputStream));
+            process.onExit().whenComplete { t, u ->
+                LOGGER.error("process did exit ${u?.message ?: "no-reason"}")
+                setupProcess()
+            }
         }
+
+        setupProcess()
 
         thread {
             while (true) {
                 try {
-                    val line = this.processReader.readLine()
+                    if (this.processReader == null) {
+                        Thread.sleep(100)
+                    }
+                    val line = this.processReader!!.readLine()
                     val (id, answer) = line.split(";")
                     val a = mapped[id]!!
                     a.value = answer
@@ -131,11 +131,14 @@ class WslSymlinksProvider(distro: String) {
         thread {
             while (true) {
                 try {
+                    if (this.processWriter == null) {
+                        Thread.sleep(100)
+                    }
                     val a = this.queue.take()
                     if (a.value != null) continue
                     mapped[a.id] = a
-                    this.processWriter.write(a.request!!)
-                    this.processWriter.flush()
+                    this.processWriter!!.write(a.request!!)
+                    this.processWriter!!.flush()
                 } catch (e: Exception) {
                     LOGGER.error("failed to write", e)
                 }
