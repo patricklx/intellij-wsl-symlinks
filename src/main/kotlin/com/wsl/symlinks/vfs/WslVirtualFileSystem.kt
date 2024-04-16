@@ -15,7 +15,9 @@ import com.intellij.openapi.vfs.impl.VirtualFileManagerImpl
 import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
 import com.intellij.util.io.URLUtil
+import com.jetbrains.rd.util.collections.SynchronizedMap
 import java.io.*
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -57,9 +59,16 @@ class MyLogger(category: String): DefaultLogger(category) {
 val myResourceLock = ReentrantLock()
 
 class WslSymlinksProvider(distro: String) {
+    val LOGGER = Logger.getInstance(WslSymlinksProvider::class.java)
 
+    private var process: Process
+    private var processReader: BufferedReader
+    private var processWriter: BufferedWriter
+    private val queue: LinkedBlockingQueue<AsyncValue> = LinkedBlockingQueue()
+    private val mapped: SynchronizedMap<String, AsyncValue> = SynchronizedMap()
 
     class AsyncValue {
+        public val id = this.hashCode().toString()
         public var request: String? = null
         internal var value: String? = null
         internal val condition = myResourceLock.newCondition()
@@ -72,24 +81,18 @@ class WslSymlinksProvider(distro: String) {
                 }
                 elapsed += 10
             }
-            if (this.value == null) {
-                throw Error("failed to obtain file info for $request")
-            }
+//            if (this.value == null) {
+//                throw Error("failed to obtain file info for $request")
+//            }
             return this.value
         }
     }
-
-    private var process: Process
-    private var processReader: BufferedReader
-    private var processWriter: BufferedWriter
-    private val queue: LinkedBlockingQueue<AsyncValue> = LinkedBlockingQueue()
 
     init {
         val bash = {}.javaClass.getResource("/files.sh")?.readText()!!
         val location = "\\\\wsl.localhost\\$distro\\var\\tmp\\intellij-idea-wsl-symlinks.sh"
         File(location).writeText(bash)
         val builder = ProcessBuilder("wsl.exe", "-d", distro,  "-e", "bash", "//var/tmp/intellij-idea-wsl-symlinks.sh")
-        val outQueue: LinkedBlockingQueue<AsyncValue> = LinkedBlockingQueue()
         val process = builder.start()
         this.process = process
 
@@ -102,6 +105,7 @@ class WslSymlinksProvider(distro: String) {
         this.processWriter = writer;
 
         process.onExit().whenComplete { t, u ->
+            LOGGER.error("process did exit", u)
             this.process = builder.start()
             this.processReader = BufferedReader(InputStreamReader(process.inputStream))
             this.processWriter = BufferedWriter(OutputStreamWriter(process.outputStream));
@@ -109,21 +113,31 @@ class WslSymlinksProvider(distro: String) {
 
         thread {
             while (true) {
-                val a = outQueue.take()
-                val line = this.processReader.readLine()
-                a.value = line
-                myResourceLock.withLock {
-                    a.condition.signalAll()
+                try {
+                    val line = this.processReader.readLine()
+                    val (id, answer) = line.split(";")
+                    val a = mapped[id]!!
+                    a.value = answer
+                    myResourceLock.withLock {
+                        a.condition.signalAll()
+                    }
+                    mapped.remove(id)
+                } catch (e: Exception) {
+                    LOGGER.error("failed to write", e)
                 }
             }
         }
 
         thread {
             while (true) {
-                val a = this.queue.take()
-                outQueue.add(a)
-                this.processWriter.write(a.request!!)
-                this.processWriter.flush()
+                try {
+                    val a = this.queue.take()
+                    mapped[a.id] = a
+                    this.processWriter.write(a.request!!)
+                    this.processWriter.flush()
+                } catch (e: Exception) {
+                    LOGGER.error("failed to write", e)
+                }
             }
         }
     }
@@ -137,12 +151,17 @@ class WslSymlinksProvider(distro: String) {
             try {
                 val wslPath = file.getWSLPath()
                 val a = AsyncValue()
-                a.request = "read-symlink;${wslPath}\n"
+                a.request = "${a.id};read-symlink;${wslPath}\n"
                 this.queue.add(a)
+                while (a.getValue() == null) {
+                    if (!queue.contains(a)) {
+                        this.queue.add(a)
+                    }
+                }
                 val link = a.getValue()
                 file.cachedWSLCanonicalPath = file.path.split("/").subList(0, 4).joinToString("/") + link
             } catch (e: IOException) {
-                //
+                LOGGER.error("failed to getWSLCanonicalPath", e)
             }
         }
 
@@ -157,12 +176,17 @@ class WslSymlinksProvider(distro: String) {
             try {
                 val path: String = file.path.replace("^//wsl\\$/[^/]+".toRegex(), "").replace("""^//wsl.localhost/[^/]+""".toRegex(), "")
                 val a = AsyncValue()
-                a.request = "is-symlink;${path}\n"
-                this.queue.add(a)
+                a.request = "${a.id};is-symlink;${path}\n"
+                while (a.getValue() == null) {
+                    if (!queue.contains(a)) {
+                        this.queue.add(a)
+                    }
+                }
                 val isSymLink = a.getValue()
                 file.isSymlink = isSymLink.equals("true")
                 return isSymLink.equals("true")
             } catch (e: Exception) {
+                LOGGER.error("failed isWslSymlink", e)
                 return false
             }
         }
