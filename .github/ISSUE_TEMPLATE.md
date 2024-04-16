@@ -29,7 +29,7 @@ IntelliJ IDEA 2018.2.4 (Ultimate Edition)
 Build #IU-182.4505.22, built on September 18, 2018
 -->
 
-- The version of `intellij-emberjs` (`Settings` -> `Plugins` -> `Ember.js`):
+- The version of `wsl-symlinks` (`Settings` -> `Plugins` -> `Wsl Symlinks`):
 
 <!-- 
 Example:
