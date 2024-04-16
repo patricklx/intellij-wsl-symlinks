@@ -74,7 +74,7 @@ class WslSymlinksProvider(distro: String) {
         internal val condition = myResourceLock.newCondition()
         fun getValue(): String? {
             var elapsed = 0
-            while (value == null && elapsed < 500) {
+            while (value == null && elapsed < 5000) {
                 if (myResourceLock.tryLock(10, TimeUnit.MILLISECONDS)) {
                     condition.await(10, TimeUnit.MILLISECONDS)
                     myResourceLock.unlock()
@@ -132,6 +132,7 @@ class WslSymlinksProvider(distro: String) {
             while (true) {
                 try {
                     val a = this.queue.take()
+                    if (a.value != null) continue
                     mapped[a.id] = a
                     this.processWriter.write(a.request!!)
                     this.processWriter.flush()
@@ -177,6 +178,7 @@ class WslSymlinksProvider(distro: String) {
                 val path: String = file.path.replace("^//wsl\\$/[^/]+".toRegex(), "").replace("""^//wsl.localhost/[^/]+""".toRegex(), "")
                 val a = AsyncValue()
                 a.request = "${a.id};is-symlink;${path}\n"
+                this.queue.add(a)
                 while (a.getValue() == null) {
                     if (!queue.contains(a)) {
                         this.queue.add(a)
