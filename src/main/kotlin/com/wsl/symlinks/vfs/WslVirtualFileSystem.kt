@@ -2,22 +2,24 @@ package com.wsl.symlinks.vfs
 
 import ai.grazie.utils.WeakHashMap
 import com.intellij.ide.AppLifecycleListener
-import com.intellij.idea.IdeaLogger
 import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.Attachment
-import com.intellij.openapi.diagnostic.DefaultLogger
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.extensions.ExtensionPointListener
+import com.intellij.openapi.extensions.PluginDescriptor
+import com.intellij.openapi.extensions.impl.ExtensionPointImpl
 import com.intellij.openapi.util.io.FileAttributes
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileSystem
-import com.intellij.openapi.vfs.impl.VirtualFileManagerImpl
 import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
+import com.intellij.openapi.vfs.newvfs.impl.FakeVirtualFile
+import com.intellij.openapi.vfs.newvfs.impl.StubVirtualFile
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
+import com.intellij.util.KeyedLazyInstance
+import com.intellij.util.KeyedLazyInstanceEP
 import com.intellij.util.io.URLUtil
-import com.jetbrains.rd.util.collections.SynchronizedMap
 import java.io.*
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -27,36 +29,10 @@ import kotlin.concurrent.withLock
 
 class StartupListener: AppLifecycleListener {
     override fun appFrameCreated(commandLineArgs: MutableList<String>) {
-        MyLogger.setup()
+
     }
 }
 
-class MyLogger(category: String): DefaultLogger(category) {
-
-    override fun error(message: String?) {
-        if (message?.contains(">1 file system registered for protocol") == true) {
-            return
-        }
-        super.error(message)
-    }
-
-    override fun error(message: String?, t: Throwable?, vararg details: String?) {
-        if (message?.contains(">1 file system registered for protocol") == true) {
-            return
-        }
-        super.error(message, t, *details)
-    }
-
-    companion object {
-        fun setup() {
-            //IdeaLogger.setFactory { category -> MyLogger(category) }
-            //Logger.setFactory { category -> MyLogger(category) }
-        }
-//        val logger = setup()
-    }
-}
-
-val myResourceLock = ReentrantLock()
 
 class WslSymlinksProvider(distro: String) {
     val LOGGER = Logger.getInstance(WslSymlinksProvider::class.java)
@@ -65,19 +41,20 @@ class WslSymlinksProvider(distro: String) {
     private var processReader: BufferedReader? = null
     private var processWriter: BufferedWriter? = null
     private val queue: LinkedBlockingQueue<AsyncValue> = LinkedBlockingQueue()
-    private val mapped: SynchronizedMap<String, AsyncValue> = SynchronizedMap()
+    private val mapped: ConcurrentHashMap<String, AsyncValue> = ConcurrentHashMap()
+    val myResourceLock = ReentrantLock()
 
-    class AsyncValue {
+    class AsyncValue(private val lock: ReentrantLock) {
         public val id = this.hashCode().toString()
         public var request: String? = null
         internal var value: String? = null
-        internal val condition = myResourceLock.newCondition()
+        internal val condition = lock.newCondition()
         fun getValue(): String? {
             var elapsed = 0
-            while (value == null && elapsed < 5000) {
-                if (myResourceLock.tryLock(10, TimeUnit.MILLISECONDS)) {
+            while (value == null && elapsed < 1000) {
+                if (lock.tryLock(10, TimeUnit.MILLISECONDS)) {
                     condition.await(10, TimeUnit.MILLISECONDS)
-                    myResourceLock.unlock()
+                    lock.unlock()
                 }
                 elapsed += 10
             }
@@ -89,24 +66,29 @@ class WslSymlinksProvider(distro: String) {
     }
 
     init {
-        val bash = {}.javaClass.getResource("/files.sh")?.readText()!!
-        val location = "\\\\wsl.localhost\\$distro\\var\\tmp\\intellij-idea-wsl-symlinks.sh"
-        File(location).writeText(bash)
-        val builder = ProcessBuilder("wsl.exe", "-d", distro,  "-e", "bash", "//var/tmp/intellij-idea-wsl-symlinks.sh")
+        LOGGER.info("starting WslSymlinksProvider for distro: $distro")
 
 
         fun setupProcess() {
+            val bash = {}.javaClass.getResource("/files.sh")?.readText()!!
+            val location = "\\\\wsl.localhost\\$distro\\var\\tmp\\intellij-idea-wsl-symlinks.sh"
+            File(location).writeText(bash)
+            val builder = ProcessBuilder("wsl.exe", "-d", distro,  "-e", "bash", "//var/tmp/intellij-idea-wsl-symlinks.sh")
             val process = builder.start()
             this.process = process
             this.processReader = BufferedReader(InputStreamReader(process.inputStream))
             this.processWriter = BufferedWriter(OutputStreamWriter(process.outputStream));
+            LOGGER.info("starting process")
             process.onExit().whenComplete { t, u ->
                 LOGGER.error("process did exit ${u?.message ?: "no-reason"}")
                 setupProcess()
             }
         }
 
-        setupProcess()
+        thread {
+            setupProcess()
+        }
+
 
         thread {
             while (true) {
@@ -123,7 +105,7 @@ class WslSymlinksProvider(distro: String) {
                     }
                     mapped.remove(id)
                 } catch (e: Exception) {
-                    LOGGER.error("failed to write", e)
+                    LOGGER.error("failed to read", e)
                 }
             }
         }
@@ -154,13 +136,18 @@ class WslSymlinksProvider(distro: String) {
         if (file.cachedWSLCanonicalPath == null) {
             try {
                 val wslPath = file.getWSLPath()
-                val a = AsyncValue()
+                val a = AsyncValue(myResourceLock)
                 a.request = "${a.id};read-symlink;${wslPath}\n"
                 this.queue.add(a)
-                while (a.getValue() == null) {
+                var n = 0
+                while (a.getValue() == null && n < 3) {
                     if (!queue.contains(a)) {
                         this.queue.add(a)
                     }
+                    n += 1
+                }
+                if (a.getValue() == null) {
+                    return file.path
                 }
                 val link = a.getValue()
                 file.cachedWSLCanonicalPath = file.path.split("/").subList(0, 4).joinToString("/") + link
@@ -179,13 +166,18 @@ class WslSymlinksProvider(distro: String) {
         if (file.isFromWSL() && file.parent != null) {
             try {
                 val path: String = file.path.replace("^//wsl\\$/[^/]+".toRegex(), "").replace("""^//wsl.localhost/[^/]+""".toRegex(), "")
-                val a = AsyncValue()
+                val a = AsyncValue(myResourceLock)
                 a.request = "${a.id};is-symlink;${path}\n"
                 this.queue.add(a)
-                while (a.getValue() == null) {
+                var n = 0
+                while (a.getValue() == null && n < 3) {
                     if (!queue.contains(a)) {
                         this.queue.add(a)
                     }
+                    n += 1
+                }
+                if (a.getValue() == null) {
+                    return false
                 }
                 val isSymLink = a.getValue()
                 file.isSymlink = isSymLink.equals("true")
@@ -200,9 +192,30 @@ class WslSymlinksProvider(distro: String) {
 }
 
 class WslVirtualFileSystem: LocalFileSystemImpl() {
+    val LOGGER = Logger.getInstance(WslVirtualFileSystem::class.java)
     private var wslSymlinksProviders: MutableMap<String, WslSymlinksProvider> = HashMap()
-    private var reentry: VirtualFile? = null
-    val lock = ReentrantLock()
+
+    init {
+        val classNameToUnregister = LocalFileSystemImpl::class.java.canonicalName
+        VirtualFileSystem.EP_NAME.point.addExtensionPointListener(object : ExtensionPointListener<KeyedLazyInstance<VirtualFileSystem>> {
+            override fun extensionRemoved(
+                extension: KeyedLazyInstance<VirtualFileSystem>,
+                pluginDescriptor: PluginDescriptor
+            ) {
+                val ext = (extension as? KeyedLazyInstanceEP)
+                if (ext != null) {
+                    pluginDescriptor.isEnabled = false
+                    ext.implementationClass =  null
+                }
+
+            }
+        }, false, this)
+        val point: ExtensionPointImpl<Any> = VirtualFileSystem.EP_NAME.point as ExtensionPointImpl<Any>
+        point.unregisterExtensions({ className, adapter ->
+            className != "com.intellij.openapi.vfs.impl.VirtualFileManagerImpl\$VirtualFileSystemBean"
+                    || adapter.createInstance<KeyedLazyInstanceEP<VirtualFileSystem>>(point.componentManager)?.implementationClass != "com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl" },
+            /* stopAfterFirstMatch = */true)
+    }
 
     override fun getProtocol(): String {
         return "file"
@@ -217,18 +230,16 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     }
 
     fun getRealVirtualFile(file: VirtualFile): VirtualFile {
-        lock.withLock {
-            if (reentry == file) {
-                throw Error("error")
-            }
-            reentry = file
-            val symlkinkWsl = file.parents.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
-            val relative = symlkinkWsl?.path?.let { file.path.replace(it, "") }
-            val resolved = symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile)?.let { this.findFileByPath(it) } }
-            val r = relative?.let { resolved?.findFileByRelativePath(it) } ?: file
-            reentry = null
-            return r
-        }
+        val symlkinkWsl = file.parents.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
+        val relative = symlkinkWsl?.path?.let { file.path.replace(it, "") }
+        val resolved = symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile)?.let { this.findFileByPath(it) } }
+        val r = relative?.let { resolved?.findFileByRelativePath(it) } ?: file
+        return r
+    }
+
+    override fun getInputStream(vfile: VirtualFile): InputStream {
+        val file = this.getRealVirtualFile(vfile)
+        return super.getInputStream(file)
     }
 
     override fun contentsToByteArray(vfile: VirtualFile): ByteArray {
@@ -244,20 +255,30 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     override fun getAttributes(vfile: VirtualFile): FileAttributes? {
         val file = getRealVirtualFile(vfile)
         var attributes = super.getAttributes(file)
+
         if (attributes != null && attributes.type == null && this.getWslSymlinksProviders(file).isWslSymlink(file)) {
-            val resolved = this.resolveSymLink(file)?.let { this.findFileByPath(it) }
+            val resolved = this.resolveSymLink(file)?.let { resPath ->
+                return@let object : StubVirtualFile() {
+                    override fun getPath(): String {
+                        return resPath
+                    }
+
+                    override fun getParent(): VirtualFile {
+                        return vfile.parent
+                    }
+                }
+            }
             if (resolved != null) {
                 val resolvedAttrs = super.getAttributes(resolved)
                 attributes = FileAttributes(resolvedAttrs?.isDirectory ?: false, false, true, attributes.isHidden, attributes.length, attributes.lastModified, attributes.isWritable, FileAttributes.CaseSensitivity.SENSITIVE)
             }
-
         }
         return attributes
     }
 
     override fun resolveSymLink(file: VirtualFile): String? {
         if (file.isFromWSL()) {
-            return this.getWslSymlinksProviders(file).getWSLCanonicalPath(file);
+            return this.getWslSymlinksProviders(file).getWSLCanonicalPath(file)
         }
         return super.resolveSymLink(file)
     }
