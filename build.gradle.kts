@@ -13,7 +13,7 @@ plugins {
 
 
 group = "com.wsl.symlinks"
-version = "2024.1.1"
+version = "2024.1.2"
 
 // Configure project's dependencies
 repositories {
