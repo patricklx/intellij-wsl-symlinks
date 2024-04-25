@@ -12,7 +12,6 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.VirtualFileSystem
 import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
-import com.intellij.openapi.vfs.newvfs.impl.FakeVirtualFile
 import com.intellij.openapi.vfs.newvfs.impl.StubVirtualFile
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
 import com.intellij.util.KeyedLazyInstance
@@ -31,6 +30,37 @@ class StartupListener: AppLifecycleListener {
     override fun appFrameCreated(commandLineArgs: MutableList<String>) {
 
     }
+}
+
+class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, fs: WslVirtualFileSystem): StubVirtualFile(fs) {
+    override fun getPath(): String {
+        return resPath
+    }
+
+    override fun getParent(): VirtualFile? {
+        return vfile.parent
+    }
+}
+
+fun <T>Boolean.ifTrue(block: () -> T): T? {
+    if (this) {
+        return block.invoke()
+    }
+    return null
+}
+
+fun <T>Boolean.ifFalse(block: () -> T): T? {
+    if (!this) {
+        return block.invoke()
+    }
+    return null
+}
+
+fun <T>Boolean.ifFalse(value: T): T? {
+    if (!this) {
+        return value
+    }
+    return null
 }
 
 
@@ -229,6 +259,11 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
         return this.wslSymlinksProviders[distro]!!
     }
 
+    fun getRealPath(file: VirtualFile): String {
+        val symlkinkWsl = file.parentsWithSelf.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
+        return symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile) } ?: file.path
+    }
+
     fun getRealVirtualFile(file: VirtualFile): VirtualFile {
         val symlkinkWsl = file.parents.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
         val relative = symlkinkWsl?.path?.let { file.path.replace(it, "") }
@@ -253,24 +288,21 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     }
 
     override fun getAttributes(vfile: VirtualFile): FileAttributes? {
-        val file = getRealVirtualFile(vfile)
-        var attributes = super.getAttributes(file)
+        var attributes = super.getAttributes(vfile)
 
-        if (attributes != null && attributes.type == null && file.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(file)) {
-            val resolved = this.resolveSymLink(file)?.let { resPath ->
-                return@let object : StubVirtualFile() {
-                    override fun getPath(): String {
-                        return resPath
-                    }
-
-                    override fun getParent(): VirtualFile {
-                        return vfile.parent
-                    }
-                }
+        if (vfile.isFromWSL() && vfile.parent != null) {
+            val filePath = getRealPath(vfile.parent)
+            val file = FakeVirtualFile(filePath + "/" + vfile.name, vfile, this)
+            val isSymlink = this.getWslSymlinksProviders(file).isWslSymlink(file)
+            val resolved = isSymlink.ifTrue { this.resolveSymLink(file)?.let { resPath ->
+                return@let FakeVirtualFile(resPath, vfile, this)
+            } }
+            if (!isSymlink && file.path != vfile.path) {
+                attributes = super.getAttributes(file)
             }
             if (resolved != null) {
-                val resolvedAttrs = super.getAttributes(resolved)
-                attributes = FileAttributes(resolvedAttrs?.isDirectory ?: false, false, true, attributes.isHidden, attributes.length, attributes.lastModified, attributes.isWritable, FileAttributes.CaseSensitivity.SENSITIVE)
+                val resolvedAttrs = super.getAttributes(resolved) ?: attributes ?: return null
+                attributes = FileAttributes(resolvedAttrs.isDirectory ?: false, false, true, resolvedAttrs.isHidden, resolvedAttrs.length, resolvedAttrs.lastModified, resolvedAttrs.isWritable, FileAttributes.CaseSensitivity.SENSITIVE)
             }
         }
         return attributes
@@ -289,12 +321,11 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     }
 
     override fun list(vfile: VirtualFile): Array<String> {
-        val file = getRealVirtualFile(vfile)
-        if (file.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(file)) {
-            val f = this.resolveSymLink(file)?.let { this.findFileByPath(it) }
-            return f?.let { super.list(it) } ?: emptyArray()
+        if (vfile.isFromWSL()) {
+            val file = FakeVirtualFile(getRealPath(vfile), vfile, this)
+            return super.list(file)
         }
-        return super.list(file)
+        return super.list(vfile)
     }
 }
 
@@ -360,6 +391,22 @@ val VirtualFile.parents: Iterable<VirtualFile>
                 override fun next(): VirtualFile {
                     file = file.parent
                     return file
+                }
+            }
+        }
+    }
+
+val VirtualFile.parentsWithSelf: Iterable<VirtualFile>
+    get() = object : Iterable<VirtualFile> {
+        override fun iterator(): Iterator<VirtualFile> {
+            var file: VirtualFile? = this@parentsWithSelf
+
+            return object : Iterator<VirtualFile> {
+                override fun hasNext() = file != null
+                override fun next(): VirtualFile {
+                    val f = file
+                    file = file?.parent
+                    return f!!
                 }
             }
         }
