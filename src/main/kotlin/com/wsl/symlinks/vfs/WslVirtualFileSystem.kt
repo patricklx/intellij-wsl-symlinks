@@ -32,7 +32,7 @@ class StartupListener: AppLifecycleListener {
     }
 }
 
-class FakeVirtualFile(val resPath: String, val vfile: VirtualFile): StubVirtualFile() {
+class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, fs: WslVirtualFileSystem): StubVirtualFile(fs) {
     override fun getPath(): String {
         return resPath
     }
@@ -290,15 +290,19 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     override fun getAttributes(vfile: VirtualFile): FileAttributes? {
         var attributes = super.getAttributes(vfile)
 
-        if (attributes != null && attributes.type == null && vfile.isFromWSL()) {
-            val filePath = getRealPath(vfile)
-            val file = FakeVirtualFile(filePath, vfile)
-            val resolved = this.resolveSymLink(file)?.let { resPath ->
-                return@let FakeVirtualFile(resPath, vfile)
+        if (vfile.isFromWSL() && vfile.parent != null) {
+            val filePath = getRealPath(vfile.parent)
+            val file = FakeVirtualFile(filePath + "/" + vfile.name, vfile, this)
+            val isSymlink = this.getWslSymlinksProviders(file).isWslSymlink(file)
+            val resolved = isSymlink.ifTrue { this.resolveSymLink(file)?.let { resPath ->
+                return@let FakeVirtualFile(resPath, vfile, this)
+            } }
+            if (!isSymlink && file.path != vfile.path) {
+                attributes = super.getAttributes(file)
             }
             if (resolved != null) {
-                val resolvedAttrs = super.getAttributes(resolved) ?: attributes
-                attributes = FileAttributes(resolvedAttrs?.isDirectory ?: false, false, true, resolvedAttrs.isHidden, resolvedAttrs.length, resolvedAttrs.lastModified, resolvedAttrs.isWritable, FileAttributes.CaseSensitivity.SENSITIVE)
+                val resolvedAttrs = super.getAttributes(resolved) ?: attributes ?: return null
+                attributes = FileAttributes(resolvedAttrs.isDirectory ?: false, false, true, resolvedAttrs.isHidden, resolvedAttrs.length, resolvedAttrs.lastModified, resolvedAttrs.isWritable, FileAttributes.CaseSensitivity.SENSITIVE)
             }
         }
         return attributes
@@ -316,13 +320,9 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
         fun getInstance() = service<VirtualFileManager>().getFileSystem(PROTOCOL) as WslVirtualFileSystem
     }
 
-    override fun findFileByPath(path: String): VirtualFile? {
-        return super.findFileByPath(path)?.let { this.getRealVirtualFile(it) }
-    }
-
     override fun list(vfile: VirtualFile): Array<String> {
         if (vfile.isFromWSL()) {
-            val file = FakeVirtualFile(getRealPath(vfile), vfile)
+            val file = FakeVirtualFile(getRealPath(vfile), vfile, this)
             return super.list(file)
         }
         return super.list(vfile)
