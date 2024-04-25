@@ -256,7 +256,7 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
         val file = getRealVirtualFile(vfile)
         var attributes = super.getAttributes(file)
 
-        if (attributes != null && attributes.type == null && this.getWslSymlinksProviders(file).isWslSymlink(file)) {
+        if (attributes != null && attributes.type == null && file.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(file)) {
             val resolved = this.resolveSymLink(file)?.let { resPath ->
                 return@let object : StubVirtualFile() {
                     override fun getPath(): String {
