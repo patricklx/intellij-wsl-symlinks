@@ -1,6 +1,15 @@
 # Changelog
 
 
+## v2024.1.4 (2024-04-25)
+
+#### :rocket: Enhancement
+* [#6](https://github.com/patricklx/intellij-wsl-symlinks/pull/6) Improve symlink resolve ([@patricklx](https://github.com/patricklx))
+
+#### Committers: 1
+- Patrick Pircher ([@patricklx](https://github.com/patricklx))
+
+
 ## v2024.1.3 (2024-04-25)
 
 #### :rocket: Enhancement
