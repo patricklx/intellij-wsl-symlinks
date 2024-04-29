@@ -4,7 +4,6 @@ while IFS='$\n' read line; do
   id=${command[0]};
   type=${command[1]};
   value=${command[2]};
-  #  echo "$id;$type;$value" > /var/log/intellij-idea-symlink.log
   if [ "$type" == "is-symlink" ]; then
     (test -L "$value") && echo "$id;true" || echo "$id;false";
   fi
