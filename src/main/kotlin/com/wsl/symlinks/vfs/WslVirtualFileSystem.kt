@@ -4,9 +4,6 @@ import ai.grazie.utils.WeakHashMap
 import com.intellij.ide.AppLifecycleListener
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.extensions.ExtensionPointListener
-import com.intellij.openapi.extensions.PluginDescriptor
-import com.intellij.openapi.extensions.impl.ExtensionPointImpl
 import com.intellij.openapi.util.io.FileAttributes
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
@@ -14,8 +11,6 @@ import com.intellij.openapi.vfs.VirtualFileSystem
 import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
 import com.intellij.openapi.vfs.newvfs.impl.StubVirtualFile
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
-import com.intellij.util.KeyedLazyInstance
-import com.intellij.util.KeyedLazyInstanceEP
 import com.intellij.util.io.URLUtil
 import java.io.*
 import java.util.concurrent.ConcurrentHashMap
@@ -28,13 +23,19 @@ import kotlin.concurrent.withLock
 
 class StartupListener: AppLifecycleListener {
     override fun appFrameCreated(commandLineArgs: MutableList<String>) {
-
+        val point = VirtualFileSystem.EP_NAME.point
+        val extension = point.extensionList.find { it.instance is LocalFileSystemImpl && it.instance.javaClass.name.contains("LocalFileSystemImpl") }
+        point.unregisterExtension(extension)
     }
 }
 
 class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, fs: WslVirtualFileSystem): StubVirtualFile(fs) {
     override fun getPath(): String {
         return resPath
+    }
+
+    override fun getLength(): Long {
+        return vfile.length
     }
 
     override fun getParent(): VirtualFile? {
@@ -226,25 +227,7 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
     private var wslSymlinksProviders: MutableMap<String, WslSymlinksProvider> = HashMap()
 
     init {
-        val classNameToUnregister = LocalFileSystemImpl::class.java.canonicalName
-        VirtualFileSystem.EP_NAME.point.addExtensionPointListener(object : ExtensionPointListener<KeyedLazyInstance<VirtualFileSystem>> {
-            override fun extensionRemoved(
-                extension: KeyedLazyInstance<VirtualFileSystem>,
-                pluginDescriptor: PluginDescriptor
-            ) {
-                val ext = (extension as? KeyedLazyInstanceEP)
-                if (ext != null) {
-                    pluginDescriptor.isEnabled = false
-                    ext.implementationClass =  null
-                }
 
-            }
-        }, false, this)
-        val point: ExtensionPointImpl<Any> = VirtualFileSystem.EP_NAME.point as ExtensionPointImpl<Any>
-        point.unregisterExtensions({ className, adapter ->
-            className != "com.intellij.openapi.vfs.impl.VirtualFileManagerImpl\$VirtualFileSystemBean"
-                    || adapter.createInstance<KeyedLazyInstanceEP<VirtualFileSystem>>(point.componentManager)?.implementationClass != "com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl" },
-            /* stopAfterFirstMatch = */true)
     }
 
     override fun getProtocol(): String {
@@ -264,26 +247,32 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
         return symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile) } ?: file.path
     }
 
+    fun getFakeVirtualFile(file: VirtualFile): VirtualFile {
+        val filePath = getRealPath(file.parent)
+        return FakeVirtualFile(filePath + "/" + file.name, file, this)
+    }
+
     fun getRealVirtualFile(file: VirtualFile): VirtualFile {
         val symlkinkWsl = file.parents.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
         val relative = symlkinkWsl?.path?.let { file.path.replace(it, "") }
-        val resolved = symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile)?.let { this.findFileByPath(it) } }
+        val resolved =
+            symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile)?.let { this.findFileByPath(it) } }
         val r = relative?.let { resolved?.findFileByRelativePath(it) } ?: file
         return r
     }
 
     override fun getInputStream(vfile: VirtualFile): InputStream {
-        val file = this.getRealVirtualFile(vfile)
+        val file = this.getFakeVirtualFile(vfile)
         return super.getInputStream(file)
     }
 
     override fun contentsToByteArray(vfile: VirtualFile): ByteArray {
-        val file = this.getRealVirtualFile(vfile)
+        val file = this.getFakeVirtualFile(vfile)
         return super.contentsToByteArray(file)
     }
 
     override fun getOutputStream(vfile: VirtualFile, requestor: Any?, modStamp: Long, timeStamp: Long): OutputStream {
-        val file = this.getRealVirtualFile(vfile)
+        val file = this.getFakeVirtualFile(vfile)
         return super.getOutputStream(file, requestor, modStamp, timeStamp)
     }
 
