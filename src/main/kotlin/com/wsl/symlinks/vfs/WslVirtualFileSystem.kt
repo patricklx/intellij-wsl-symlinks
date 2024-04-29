@@ -29,13 +29,13 @@ class StartupListener: AppLifecycleListener {
     }
 }
 
-class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, fs: WslVirtualFileSystem): StubVirtualFile(fs) {
+class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, val fs: WslVirtualFileSystem): StubVirtualFile(fs) {
     override fun getPath(): String {
         return resPath
     }
 
     override fun getLength(): Long {
-        return vfile.length
+        return fs.getAttributes(vfile)?.length ?: 0
     }
 
     override fun getParent(): VirtualFile? {
@@ -244,7 +244,8 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
 
     fun getRealPath(file: VirtualFile): String {
         val symlkinkWsl = file.parentsWithSelf.find { it.isFromWSL() && this.getWslSymlinksProviders(file).isWslSymlink(it) }
-        return symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile) } ?: file.path
+        val relative = symlkinkWsl?.path?.let { file.path.replace(it, "") }
+        return symlkinkWsl?.let { virtualFile -> this.resolveSymLink(virtualFile) + relative } ?: file.path
     }
 
     fun getFakeVirtualFile(file: VirtualFile): VirtualFile {
