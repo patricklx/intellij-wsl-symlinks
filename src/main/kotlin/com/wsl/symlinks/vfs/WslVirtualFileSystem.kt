@@ -12,7 +12,8 @@ import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
 import com.intellij.openapi.vfs.newvfs.impl.StubVirtualFile
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
 import com.intellij.util.io.URLUtil
-import java.io.*
+import sun.nio.fs.AbstractFileSystemProvider
+import sun.nio.fs.DefaultFileSystemProvider
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -20,12 +21,17 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
 
+class WslfsFileSystemProvider: DefaultFileSystemProvider() {
+
+}
+
 
 class StartupListener: AppLifecycleListener {
     override fun appFrameCreated(commandLineArgs: MutableList<String>) {
         val point = VirtualFileSystem.EP_NAME.point
         val extension = point.extensionList.find { it.instance is LocalFileSystemImpl && it.instance.javaClass.name.contains("LocalFileSystemImpl") }
         point.unregisterExtension(extension)
+        System.setProperty("java.nio.file.spi.DefaultFileSystemProvider", "com.wsl.symlinks.vfs.WslfsFileSystemProvider");
     }
 }
 
