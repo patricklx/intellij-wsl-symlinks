@@ -12,40 +12,154 @@ import com.intellij.openapi.vfs.impl.local.LocalFileSystemImpl
 import com.intellij.openapi.vfs.newvfs.impl.StubVirtualFile
 import com.intellij.platform.workspace.storage.url.VirtualFileUrl
 import com.intellij.util.io.URLUtil
-import sun.nio.fs.AbstractFileSystemProvider
-import sun.nio.fs.DefaultFileSystemProvider
+import com.intellij.util.lang.PathClassLoader
+import java.io.*
+import java.net.URI
+import java.nio.channels.SeekableByteChannel
+import java.nio.file.*
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.FileAttributeView
+import java.nio.file.spi.FileSystemProvider
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
+import kotlin.io.path.absolutePathString
 
-class WslfsFileSystemProvider: DefaultFileSystemProvider() {
 
+class WslfsFileSystemProvider(val provider: FileSystemProvider): FileSystemProvider() {
+    val fs = WslVirtualFileSystem()
+
+    class WslAttrs(val vfile: VirtualFile, attrs: BasicFileAttributes): BasicFileAttributes by attrs {
+        override fun isSymbolicLink(): Boolean {
+            val provider = WslSymlinksProvider.getWslSymlinksProviders(vfile.getWSLDistribution()!!)
+            return provider.isWslSymlink(vfile)
+        }
+    }
+
+    override fun getScheme(): String {
+        return provider.scheme
+    }
+
+    override fun newFileSystem(uri: URI?, env: MutableMap<String, *>?): FileSystem {
+       return provider.newFileSystem(uri, env)
+    }
+
+    override fun getFileSystem(uri: URI?): FileSystem {
+        return provider.getFileSystem(uri)
+    }
+
+    override fun getPath(uri: URI?): Path {
+        return provider.getPath(uri)
+    }
+
+    override fun newByteChannel(
+        path: Path?,
+        options: MutableSet<out OpenOption>?,
+        vararg attrs: FileAttribute<*>?
+    ): SeekableByteChannel {
+        return provider.newByteChannel(path, options, *attrs)
+    }
+
+    override fun newDirectoryStream(dir: Path?, filter: DirectoryStream.Filter<in Path>?): DirectoryStream<Path> {
+        return provider.newDirectoryStream(dir, filter)
+    }
+
+    override fun createDirectory(dir: Path?, vararg attrs: FileAttribute<*>?) {
+        return provider.createDirectory(dir, *attrs)
+    }
+
+    override fun delete(path: Path?) {
+        return provider.delete(path)
+    }
+
+    override fun copy(source: Path?, target: Path?, vararg options: CopyOption?) {
+        return provider.copy(source, target, *options)
+    }
+
+    override fun move(source: Path?, target: Path?, vararg options: CopyOption?) {
+        return provider.move(source, target, *options)
+    }
+
+    override fun isSameFile(path: Path?, path2: Path?): Boolean {
+        return provider.isSameFile(path, path2)
+    }
+
+    override fun isHidden(path: Path?): Boolean {
+        return provider.isHidden(path)
+    }
+
+    override fun getFileStore(path: Path?): FileStore {
+        return provider.getFileStore(path)
+    }
+
+    override fun checkAccess(path: Path?, vararg modes: AccessMode?) {
+        return provider.checkAccess(path, *modes)
+    }
+
+    override fun <V : FileAttributeView?> getFileAttributeView(
+        path: Path?,
+        type: Class<V>?,
+        vararg options: LinkOption?
+    ): V {
+        return provider.getFileAttributeView(path, type, *options)
+    }
+
+    override fun <A : BasicFileAttributes?> readAttributes(
+        path: Path,
+        type: Class<A>,
+        vararg options: LinkOption?
+    ): A {
+        val attrs = provider.readAttributes(path, type, *options)
+        val vfile = FakeVirtualFile(path.absolutePathString(), null, fs)
+        if (vfile.isFromWSL()) {
+            return WslAttrs(vfile, attrs as BasicFileAttributes) as A
+        }
+        return attrs
+    }
+
+    override fun readAttributes(
+        path: Path,
+        attributes: String,
+        vararg options: LinkOption
+    ): MutableMap<String, Any> {
+        val attrs = provider.readAttributes(path, attributes, *options)
+        val vfile = FakeVirtualFile(path.absolutePathString(), null, fs)
+        if (vfile.isFromWSL()) {
+
+        }
+        return attrs
+    }
+
+    override fun setAttribute(path: Path?, attribute: String?, value: Any?, vararg options: LinkOption?) {
+        return provider.setAttribute(path, attribute, value, *options)
+    }
 }
 
 
 class StartupListener: AppLifecycleListener {
     override fun appFrameCreated(commandLineArgs: MutableList<String>) {
+        System.setProperty("java.nio.file.spi.DefaultFileSystemProvider", "com.wsl.symlinks.vfs.WslfsFileSystemProvider");
         val point = VirtualFileSystem.EP_NAME.point
         val extension = point.extensionList.find { it.instance is LocalFileSystemImpl && it.instance.javaClass.name.contains("LocalFileSystemImpl") }
         point.unregisterExtension(extension)
-        System.setProperty("java.nio.file.spi.DefaultFileSystemProvider", "com.wsl.symlinks.vfs.WslfsFileSystemProvider");
     }
 }
 
-class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, val fs: WslVirtualFileSystem): StubVirtualFile(fs) {
+class FakeVirtualFile(val resPath: String, val vfile: VirtualFile?, val fs: WslVirtualFileSystem): StubVirtualFile(fs) {
     override fun getPath(): String {
         return resPath
     }
 
     override fun getLength(): Long {
-        return fs.getAttributes(vfile)?.length ?: 0
+        return vfile?.let { fs.getAttributes(it) }?.length ?: 0
     }
 
     override fun getParent(): VirtualFile? {
-        return vfile.parent
+        return vfile?.parent
     }
 }
 
@@ -69,6 +183,7 @@ fun <T>Boolean.ifFalse(value: T): T? {
     }
     return null
 }
+
 
 
 class WslSymlinksProvider(distro: String) {
@@ -104,7 +219,6 @@ class WslSymlinksProvider(distro: String) {
 
     init {
         LOGGER.info("starting WslSymlinksProvider for distro: $distro")
-
 
         fun setupProcess() {
             val bash = {}.javaClass.getResource("/files.sh")?.readText()!!
@@ -226,14 +340,23 @@ class WslSymlinksProvider(distro: String) {
         }
         return false
     }
+
+    companion object {
+        private var wslSymlinksProviders: MutableMap<String, WslSymlinksProvider> = HashMap()
+        fun getWslSymlinksProviders(distro: String): WslSymlinksProvider {
+            if (!this.wslSymlinksProviders.containsKey(distro)) {
+                this.wslSymlinksProviders[distro] = WslSymlinksProvider(distro)
+            }
+            return this.wslSymlinksProviders[distro]!!
+        }
+    }
 }
 
 class WslVirtualFileSystem: LocalFileSystemImpl() {
     val LOGGER = Logger.getInstance(WslVirtualFileSystem::class.java)
-    private var wslSymlinksProviders: MutableMap<String, WslSymlinksProvider> = HashMap()
 
     init {
-
+        System.setProperty("java.nio.file.spi.DefaultFileSystemProvider", "sun.nio.fs.WindowsFileSystemProvider,com.wsl.symlinks.vfs.WslfsFileSystemProvider");
     }
 
     override fun getProtocol(): String {
@@ -242,10 +365,7 @@ class WslVirtualFileSystem: LocalFileSystemImpl() {
 
     fun getWslSymlinksProviders(file: VirtualFile): WslSymlinksProvider {
         val distro = file.getWSLDistribution()!!
-        if (!this.wslSymlinksProviders.containsKey(distro)) {
-            this.wslSymlinksProviders[distro] = WslSymlinksProvider(distro)
-        }
-        return this.wslSymlinksProviders[distro]!!
+        return WslSymlinksProvider.getWslSymlinksProviders(distro)
     }
 
     fun getRealPath(file: VirtualFile): String {

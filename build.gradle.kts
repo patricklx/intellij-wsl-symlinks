@@ -11,6 +11,9 @@ plugins {
     id("org.jetbrains.intellij") version "1.17.2"
 }
 
+tasks.runIde {
+    jvmArgs("java.nio.file.spi.DefaultFileSystemProvider=com.wsl.symlinks.vfs.WslfsFileSystemProvider")
+}
 
 group = "com.wsl.symlinks"
 version = "2024.1.5"
