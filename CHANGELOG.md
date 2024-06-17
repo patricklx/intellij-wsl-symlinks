@@ -1,6 +1,15 @@
 # Changelog
 
 
+## v2024.2.0 (2024-06-17)
+
+#### :rocket: Enhancement
+* [#10](https://github.com/patricklx/intellij-wsl-symlinks/pull/10) 2024.2 EAP ([@patricklx](https://github.com/patricklx))
+
+#### Committers: 1
+- Patrick Pircher ([@patricklx](https://github.com/patricklx))
+
+
 
 
 ## v2024.1.4 (2024-04-25)
