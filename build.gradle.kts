@@ -13,7 +13,7 @@ plugins {
 
 
 group = "com.wsl.symlinks"
-version = "2024.1.5"
+version = "2024.2.0"
 
 // Configure project's dependencies
 repositories {
@@ -38,7 +38,7 @@ intellij {
 
     // see https://www.jetbrains.com/intellij-repository/releases/
     // and https://www.jetbrains.com/intellij-repository/snapshots/
-    version.set("2024.1")
+    version.set("241.18034.12-EAP-SNAPSHOT")
     type.set("IU")
 
     downloadSources.set(!System.getenv().containsKey("CI"))
