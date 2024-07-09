@@ -21,7 +21,7 @@ plugins {
 }
 
 group = "com.wsl.symlinks"
-version = "2024.2.0"
+version = "2024.2.1"
 
 
 dependencies {
