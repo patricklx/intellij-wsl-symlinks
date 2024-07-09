@@ -35,7 +35,7 @@ dependencies {
             zipSigner()
             instrumentationTools()
             testFramework(TestFrameworkType.Platform)
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "242.19533.43")
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "242.19890.14")
         }
 }
 
@@ -76,7 +76,9 @@ tasks.buildSearchableOptions {
 }
 
 
-tasks.register("printVersion") { println(version) }
+tasks.register("printVersion") {
+    doLast { println(version) }
+}
 
 
 tasks.register("updateChangelog") {
