@@ -30,6 +30,11 @@ class StartupListener: AppLifecycleListener {
 }
 
 class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, val fs: WslVirtualFileSystem): StubVirtualFile(fs) {
+
+    override fun getName() {
+        return vfile.name
+    }
+
     override fun getPath(): String {
         return resPath
     }
