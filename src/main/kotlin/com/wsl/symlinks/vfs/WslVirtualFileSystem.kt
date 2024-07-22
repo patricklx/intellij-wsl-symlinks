@@ -4,6 +4,7 @@ import ai.grazie.utils.WeakHashMap
 import com.intellij.ide.AppLifecycleListener
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.util.NlsSafe
 import com.intellij.openapi.util.io.FileAttributes
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
@@ -31,7 +32,7 @@ class StartupListener: AppLifecycleListener {
 
 class FakeVirtualFile(val resPath: String, val vfile: VirtualFile, val fs: WslVirtualFileSystem): StubVirtualFile(fs) {
 
-    override fun getName() {
+    override fun getName(): String {
         return vfile.name
     }
 
