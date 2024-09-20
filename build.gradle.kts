@@ -14,20 +14,19 @@ plugins {
     // Java support
     id("java")
     // Kotlin support
-    id("org.jetbrains.kotlin.jvm") version "1.9.24"
+    id("org.jetbrains.kotlin.jvm") version "2.0.20"
     // gradle-intellij-plugin - read more: https://github.com/JetBrains/gradle-intellij-plugin
-    id("org.jetbrains.intellij.platform") version "2.0.0-beta7"
-//    id("org.jetbrains.intellij.platform.migration") version "2.0.0-beta7"
+    id("org.jetbrains.intellij.platform") version "2.0.1"
 }
 
 group = "com.wsl.symlinks"
-version = "2024.2.2"
+version = "2024.3.0"
 
 
 dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test")
-    testImplementation("org.assertj:assertj-core:3.25.3")
-    testImplementation("org.junit.platform:junit-platform-launcher:1.10.2")
+    testImplementation("org.assertj:assertj-core:3.26.3")
+    testImplementation("org.junit.platform:junit-platform-launcher:1.11.0")
     implementation(kotlin("test"))
     implementation("org.codehaus.jettison:jettison:1.5.4")
     intellijPlatform {
@@ -35,7 +34,7 @@ dependencies {
             zipSigner()
             instrumentationTools()
             testFramework(TestFrameworkType.Platform)
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "242.19890.14")
+            create(IntelliJPlatformType.IntellijIdeaUltimate, "243.15521.24")
         }
 }
 
